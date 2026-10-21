@@ -86,6 +86,16 @@ func TestParseRules(t *testing.T) {
 			in:   "[a]\n",
 			want: nil,
 		},
+		{
+			name: "an empty file yields nothing",
+			in:   "",
+			want: nil,
+		},
+		{
+			name: "carriage returns are not part of a value",
+			in:   "[a]\r\nb = 1\r\n",
+			want: []Entry{{Section: "a", Key: "b", Value: "1", File: "config", Line: 2}},
+		},
 	}
 
 	for _, c := range cases {
