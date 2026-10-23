@@ -17,7 +17,19 @@ entries, err := gitconfig.Parse(f, ".git/config")
 
 Each entry carries its section, subsection, key, value, file and line, in the order the file declared it, so a later pass can decide which keys name a program.
 
-Run the tests with `go test ./...`.
+## Checked against git itself
+
+`internal/gitoracle` makes a real git binary the oracle for the parser. It takes the binary from `GITDISARM_GIT`, or from `PATH`, records `git --version` in the test log, and asks it for
+
+```
+git config --file <file> --list --show-origin --null
+```
+
+with `GIT_CONFIG_NOSYSTEM=1` and `HOME` pointing at a throwaway directory, so the listing can only come from the file under test. The oracle only lists: no value in a configuration is ever run as a program.
+
+The differential test writes synthetic configurations into a temporary directory and requires `Parse` to return exactly the keys and values git reports for them, and to refuse every file git refuses. With no git binary available it skips with an explicit message rather than passing quietly.
+
+Run the tests with `go test ./...`, or pin the binary first: `GITDISARM_GIT=/usr/bin/git go test ./...`.
 
 ---
 
