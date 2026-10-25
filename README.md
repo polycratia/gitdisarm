@@ -17,6 +17,23 @@ entries, err := gitconfig.Parse(f, ".git/config")
 
 Each entry carries its section, subsection, key, value, file and line, in the order the file declared it, so a later pass can decide which keys name a program.
 
+## Package `catalog`
+
+The second piece is the catalog of keys that make git run something, held as data: one row per key pattern, with the family it belongs to, the earliest git version that reads it, and the override that disarms it. The catalog carries its own `Version` and the git version its rows were read from.
+
+```go
+f := catalog.Classify(entry)
+if f.Class == catalog.Executes {
+	fmt.Printf("%s runs %q — disarm with: git %s …\n", catalog.Name(entry), entry.Value, f.Disarm)
+}
+```
+
+`Classify` answers `executes`, `inert` or `unknown`. Rows cover `core.fsmonitor`, `core.sshCommand`, `core.pager`, `pager.<cmd>`, `core.editor`, `sequence.editor`, `diff.external`, `diff.<driver>.command` and `.textconv`, `filter.<driver>.clean`, `.smudge` and `.process`, `merge.<driver>.driver`, `credential.helper`, `alias.<name>` whose expansion begins with `!`, `gpg.program` and `core.hooksPath` — along with the neighbouring keys that only look dangerous, so a boolean `core.fsmonitor` or a `pager.log = false` is answered `inert` rather than reported.
+
+A key no row covers, inside a family whose drivers are nothing but the programs their keys name — `filter.<driver>.*`, `diff.<driver>.*`, `merge.<driver>.*`, `gpg.*` — is answered `executes` anyway, with an override that empties it. Everything else is `unknown` and says so, rather than being quietly called safe.
+
+`NotCovered` names what can still end in a program being run and what the catalog has no verdict for: `hook.<name>.command`, `include.path`, `core.gitProxy`, `uploadpack.packObjectsHook`, a template directory, the executables already sitting in `.git/hooks`. It is exported so a report can print it, because a short list of findings must never read as a clean repository.
+
 ## Checked against git itself
 
 `internal/gitoracle` makes a real git binary the oracle for the parser. It takes the binary from `GITDISARM_GIT`, or from `PATH`, records `git --version` in the test log, and asks it for
