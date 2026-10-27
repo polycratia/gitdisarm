@@ -34,6 +34,34 @@ A key no row covers, inside a family whose drivers are nothing but the programs 
 
 `NotCovered` names what can still end in a program being run and what the catalog has no verdict for: `hook.<name>.command`, `include.path`, `core.gitProxy`, `uploadpack.packObjectsHook`, a template directory, the executables already sitting in `.git/hooks`. It is exported so a report can print it, because a short list of findings must never read as a clean repository.
 
+## Command `gitdisarm`
+
+The command puts the two together: it reads a repository's configuration, classifies every key, and prints the override for each one that names a program.
+
+```
+$ gitdisarm ./arrived-as-files
+arrived-as-files/.git/config: 2 keys
+executes  core.pager = "sh -c id"
+          the pager git pipes its output into — git 1.5, pager
+          disarm: -c core.pager=cat
+unknown   user.name = "someone"
+          no row covers user.name
+
+keys that name a program: 1; keys this catalog does not decide: 1 (catalog version 1, rows read from git 2.47)
+
+Run git with every override at once:
+
+  git -c core.pager=cat <command>
+
+Not decided here, and still able to end in a program being run:
+
+  hook.<name>.command — …
+```
+
+With no argument it reads `.git/config` in the current directory; a directory argument is read the same way, or as a bare repository's own config file, and anything else is read as a configuration file. `-all` reports the covered keys that name no program as well. Overrides that belong to the command rather than to git, such as `--no-ext-diff`, are listed apart from the `-c` ones.
+
+It exits 1 when at least one key names a program, 2 when a file cannot be read or is malformed, and 0 otherwise. Exit 0 is not a claim that the repository is safe, which is why every report ends with the catalog's gaps.
+
 ## Checked against git itself
 
 `internal/gitoracle` makes a real git binary the oracle for the parser. It takes the binary from `GITDISARM_GIT`, or from `PATH`, records `git --version` in the test log, and asks it for
