@@ -5,6 +5,7 @@
 package catalog
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/polycratia/gitdisarm/gitconfig"
@@ -102,13 +103,13 @@ var Rules = []Rule{
 	{
 		Pattern: "core.fsmonitor", Family: FamilyCore, Since: "2.37",
 		Class:   Inert,
-		Runs:    "the file-system monitor built into git, not a program the repository names",
+		Runs:    "a value git reads as a boolean, so the file-system monitor built into git when true and no monitor at all when false, never a program the repository names",
 		section: "core", key: "fsmonitor", value: boolValue,
 	},
 	{
 		Pattern: "core.fsmonitor", Family: FamilyCore, Since: "2.16",
 		Class:   Executes, Disarm: "-c core.fsmonitor=false",
-		Runs:    "the hook git starts to be told which files changed, on nearly every command",
+		Runs:    "the hook git starts to be told which files changed, on nearly every command, because git cannot read this value as a boolean",
 		section: "core", key: "fsmonitor",
 	},
 	{
@@ -449,7 +450,8 @@ func (r *Rule) matches(e gitconfig.Entry) bool {
 	}
 	switch r.value {
 	case boolValue:
-		return isBool(e.Value)
+		_, ok := parseBool(e.Value)
+		return ok
 	case bangValue:
 		return strings.HasPrefix(strings.TrimLeft(e.Value, " \t"), "!")
 	}
@@ -469,10 +471,88 @@ func familyOf(e gitconfig.Entry) (Family, bool) {
 	return family, true
 }
 
-func isBool(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "", "true", "false", "yes", "no", "on", "off", "1", "0":
-		return true
+// parseBool reports the truth git reads from a configuration value, and
+// whether git reads it as a boolean at all. It mirrors git's own reader:
+// true/yes/on and false/no/off in any case, an empty value, and any integer
+// git takes. Whitespace is not forgiven, because a value git cannot read as a
+// boolean is a command it runs instead.
+func parseBool(v string) (truth, ok bool) {
+	switch strings.ToLower(v) {
+	case "":
+		return false, true
+	case "true", "yes", "on":
+		return true, true
+	case "false", "no", "off":
+		return false, true
 	}
-	return false
+	n, ok := parseInt(v)
+	return n != 0, ok
+}
+
+// parseInt reads an integer the way git's configuration reader does: leading
+// whitespace, a sign, the base the prefix implies, one optional k/m/g unit and
+// nothing else, bounded by the largest int git takes.
+func parseInt(v string) (int64, bool) {
+	const max = 1<<31 - 1
+	s := strings.TrimLeft(v, " \t\n\v\f\r")
+	negative := false
+	if s != "" && (s[0] == '+' || s[0] == '-') {
+		negative = s[0] == '-'
+		s = s[1:]
+	}
+	base := 10
+	switch {
+	case strings.HasPrefix(s, "0x"), strings.HasPrefix(s, "0X"):
+		base, s = 16, s[2:]
+	case len(s) > 1 && s[0] == '0':
+		base = 8
+	}
+	n := digitRun(s, base)
+	if n == 0 {
+		return 0, false
+	}
+	val, err := strconv.ParseUint(s[:n], base, 64)
+	if err != nil {
+		return 0, false
+	}
+	factor := uint64(1)
+	switch unit := s[n:]; {
+	case unit == "":
+	case strings.EqualFold(unit, "k"):
+		factor = 1024
+	case strings.EqualFold(unit, "m"):
+		factor = 1024 * 1024
+	case strings.EqualFold(unit, "g"):
+		factor = 1024 * 1024 * 1024
+	default:
+		return 0, false
+	}
+	if val > max/factor {
+		return 0, false
+	}
+	val *= factor
+	if negative {
+		return -int64(val), true
+	}
+	return int64(val), true
+}
+
+func digitRun(s string, base int) int {
+	n := 0
+	for n < len(s) && digitValue(s[n]) < base {
+		n++
+	}
+	return n
+}
+
+func digitValue(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'z':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'Z':
+		return int(c-'A') + 10
+	}
+	return 36
 }
