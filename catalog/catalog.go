@@ -474,8 +474,9 @@ func familyOf(e gitconfig.Entry) (Family, bool) {
 // parseBool reports the truth git reads from a configuration value, and
 // whether git reads it as a boolean at all. It mirrors git's own reader:
 // true/yes/on and false/no/off in any case, an empty value, and any integer
-// git takes. Whitespace is not forgiven, because a value git cannot read as a
-// boolean is a command it runs instead.
+// git takes. A word is matched whole, while an integer may be preceded by
+// whitespace, because git compares the one and scans the other; a value git
+// cannot read as a boolean is a command it runs instead.
 func parseBool(v string) (truth, ok bool) {
 	switch strings.ToLower(v) {
 	case "":

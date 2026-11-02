@@ -24,6 +24,7 @@ var fsmonitorCases = []struct {
 	{`fsmonitor = TRUE`, "TRUE", true, true},
 	{`fsmonitor = TrUe`, "TrUe", true, true},
 	{`fsmonitor = yes`, "yes", true, true},
+	{`fsmonitor = yEs`, "yEs", true, true},
 	{`fsmonitor = On`, "On", true, true},
 	{`fsmonitor = false`, "false", true, false},
 	{`fsmonitor = FALSE`, "FALSE", true, false},
@@ -31,22 +32,37 @@ var fsmonitorCases = []struct {
 	{`fsmonitor = oFF`, "oFF", true, false},
 	{`fsmonitor = 1`, "1", true, true},
 	{`fsmonitor = 0`, "0", true, false},
+	{`fsmonitor = -0`, "-0", true, false},
+	{`fsmonitor = +1`, "+1", true, true},
 	{`fsmonitor = 2`, "2", true, true},
 	{`fsmonitor = -1`, "-1", true, true},
 	{`fsmonitor = 010`, "010", true, true},
 	{`fsmonitor = 0x2`, "0x2", true, true},
+	{`fsmonitor = 0X2`, "0X2", true, true},
 	{`fsmonitor = 1k`, "1k", true, true},
+	{`fsmonitor = 1K`, "1K", true, true},
+	{`fsmonitor = 2047m`, "2047m", true, true},
+	{`fsmonitor = 2147483647`, "2147483647", true, true},
 	{`fsmonitor =`, "", true, false},
 	{`fsmonitor`, "true", true, true},
 	{`fsmonitor = ""`, "", true, false},
 	{`fsmonitor = "true"`, "true", true, true},
 	{`fsmonitor = "yes"`, "yes", true, true},
+	{`fsmonitor = tr"ue"`, "true", true, true},
+	{`fsmonitor =    true   `, "true", true, true},
+	// git reads an integer through strtoimax, which skips leading whitespace,
+	// while the words it accepts are compared whole.
+	{`fsmonitor = " 1"`, " 1", true, true},
 	{`fsmonitor = "  true"`, "  true", false, false},
 	{`fsmonitor = "true "`, "true ", false, false},
+	{`fsmonitor = "1 "`, "1 ", false, false},
 	{`fsmonitor = " "`, " ", false, false},
 	{`fsmonitor = tru`, "tru", false, false},
 	{`fsmonitor = 2x`, "2x", false, false},
 	{`fsmonitor = 0x`, "0x", false, false},
+	{`fsmonitor = 08`, "08", false, false},
+	{`fsmonitor = 2048m`, "2048m", false, false},
+	{`fsmonitor = 2147483648`, "2147483648", false, false},
 	{`fsmonitor = 4294967296`, "4294967296", false, false},
 	{`fsmonitor = yes please`, "yes please", false, false},
 	{`fsmonitor = .git/hooks/fsmonitor-watchman`, ".git/hooks/fsmonitor-watchman", false, false},
@@ -132,6 +148,21 @@ func TestFsmonitorSplitAgreesWithGit(t *testing.T) {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
 
+			listed, err := o.List(path)
+			if err != nil {
+				t.Fatalf("git refused a file the parser accepts: %v", err)
+			}
+			if len(listed) != 1 || listed[0].Name != "core.fsmonitor" {
+				t.Fatalf("git listed %+v, want one core.fsmonitor", listed)
+			}
+			gitValue := listed[0].Value
+			if !listed[0].HasValue {
+				gitValue = "true"
+			}
+			if gitValue != c.value {
+				t.Fatalf("git read the value as %q, while the table says %q", gitValue, c.value)
+			}
+
 			truth, err := o.Bool(path, "core.fsmonitor")
 			var refused *gitoracle.RefusedError
 			if err != nil && !errors.As(err, &refused) {
@@ -146,11 +177,14 @@ func TestFsmonitorSplitAgreesWithGit(t *testing.T) {
 			}
 
 			e := parseFsmonitor(t, c.line)
-			class := Classify(e).Class
-			if ourBool := class == Inert; ourBool != gitBool {
-				t.Fatalf("Classify() = %s, so boolean = %t, while git read it as a boolean = %t", class, ourBool, gitBool)
+			f := Classify(e)
+			if ourBool := f.Class == Inert; ourBool != gitBool {
+				t.Fatalf("Classify() = %s, so boolean = %t, while git read it as a boolean = %t", f.Class, ourBool, gitBool)
 			}
 			if !gitBool {
+				if f.Entry.Value != gitValue {
+					t.Errorf("Classify() reported %q, want the command text git read, %q", f.Entry.Value, gitValue)
+				}
 				return
 			}
 			if got, _ := parseBool(e.Value); got != truth {

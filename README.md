@@ -30,6 +30,8 @@ if f.Class == catalog.Executes {
 
 `Classify` answers `executes`, `inert` or `unknown`. Rows cover `core.fsmonitor`, `core.sshCommand`, `core.pager`, `pager.<cmd>`, `core.editor`, `sequence.editor`, `diff.external`, `diff.<driver>.command` and `.textconv`, `filter.<driver>.clean`, `.smudge` and `.process`, `merge.<driver>.driver`, `credential.helper`, `alias.<name>` whose expansion begins with `!`, `gpg.program` and `core.hooksPath` — along with the neighbouring keys that only look dangerous, so a boolean `core.fsmonitor` or a `pager.log = false` is answered `inert` rather than reported.
 
+Whether a value is a boolean is git's own question, not a guess: `true`, `yes`, `on`, `false`, `no`, `off` in any case, an empty value, and any integer git takes, including the bases and the `k`/`m`/`g` units it accepts. A `core.fsmonitor` git reads as a boolean selects the monitor built into git, or no monitor at all; anything else is the hook command git starts, and is reported with the text the file gave it.
+
 A key no row covers, inside a family whose drivers are nothing but the programs their keys name — `filter.<driver>.*`, `diff.<driver>.*`, `merge.<driver>.*`, `gpg.*` — is answered `executes` anyway, with an override that empties it. Everything else is `unknown` and says so, rather than being quietly called safe.
 
 `NotCovered` names what can still end in a program being run and what the catalog has no verdict for: `hook.<name>.command`, `include.path`, `core.gitProxy`, `uploadpack.packObjectsHook`, a template directory, the executables already sitting in `.git/hooks`. It is exported so a report can print it, because a short list of findings must never read as a clean repository.
@@ -73,6 +75,14 @@ git config --file <file> --list --show-origin --null
 with `GIT_CONFIG_NOSYSTEM=1` and `HOME` pointing at a throwaway directory, so the listing can only come from the file under test. The oracle only lists: no value in a configuration is ever run as a program.
 
 The differential test writes synthetic configurations into a temporary directory and requires `Parse` to return exactly the keys and values git reports for them, and to refuse every file git refuses. With no git binary available it skips with an explicit message rather than passing quietly.
+
+The same oracle answers how git reads one value as a boolean:
+
+```
+git config --type=bool --file <file> <key>
+```
+
+A table of `core.fsmonitor` spellings — mixed case, quoted, quotes stitched into the middle of a word, integers in every base and unit git accepts, and the boundary where its integer stops — requires the boolean/command split to accept and refuse exactly what git accepts and refuses, and to read the same truth. So a value git calls a boolean is never reported as a program, and a value git refuses is reported as a command with the text git itself read from the file.
 
 Run the tests with `go test ./...`, or pin the binary first: `GITDISARM_GIT=/usr/bin/git go test ./...`.
 
