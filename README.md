@@ -36,6 +36,23 @@ A key no row covers, inside a family whose drivers are nothing but the programs 
 
 `NotCovered` names what can still end in a program being run and what the catalog has no verdict for: `hook.<name>.command`, `include.path`, `core.gitProxy`, `uploadpack.packObjectsHook`, a template directory, the executables already sitting in `.git/hooks`. It is exported so a report can print it, because a short list of findings must never read as a clean repository.
 
+## Package `repo`
+
+A repository that arrived as files decides for itself where its git directory is, and `repo.Resolve` reads that decision as data:
+
+- `.git` as a directory, as a symlink, or as a file carrying a `gitdir:` line, taken relative to the directory holding it;
+- the `commondir` pointer a linked worktree leaves in its git directory, taken relative to that directory, naming where refs, objects and hooks are shared from;
+- the `gitdir` pointer that leads back to the linked worktree's own `.git` file, whose directory is the top of the work tree.
+
+```go
+l, err := repo.Resolve("./arrived-as-files")
+h, err := l.Hooks(entries)
+```
+
+Every one of those paths has to stay inside the checkout. One that leaves it yields an `*EscapeError` wrapping `ErrEscapesCheckout`, naming the pointer file that said so, the field it stood for, where it led and the root it had to stay inside — and nothing is followed. The question is asked twice: lexically, so that a path which never existed is refused all the same, and again after `filepath.EvalSymlinks` has followed as much of the path as exists, so that a `.git` symlinked out of the tree is refused just as a `gitdir: ../elsewhere` line is.
+
+`Layout.Hooks` answers which directory a git run would take its hooks from — `core.hooksPath` when the configuration sets one, relative to the top of the work tree and with the last declaration winning, and the common directory's `hooks` otherwise — and lists every executable regular file in it. Symlinks are followed when deciding that, because a link to an executable is one more program git would start. A directory that is absent, or is no directory at all, runs nothing. A hooks directory outside the checkout is reported as `Outside` rather than refused: the configuration may ask for what a pointer file may not, and the point is to show it.
+
 ## Command `gitdisarm`
 
 The command puts the two together: it reads a repository's configuration, classifies every key, and prints the override for each one that names a program.
