@@ -1,6 +1,7 @@
 // Package gitoracle runs a real git binary as an oracle for the configuration
-// parser: it asks git which keys and values it reads from a file. It only ever
-// lists. No value found in a configuration is used as a program.
+// parser: it asks git which keys and values it reads from a file, and what it
+// makes of a tree. It only ever asks. No value found in a configuration is
+// used as a program.
 package gitoracle
 
 import (
@@ -93,11 +94,21 @@ func (o *Oracle) List(file string) ([]Entry, error) {
 	return parseList(out)
 }
 
-func (o *Oracle) run(args ...string) ([]byte, error) {
+// In runs git from inside a directory, with the same isolated environment as
+// every other invocation, and returns what it printed. It is how a test asks
+// git what it makes of a tree; the arguments come from the test, never from a
+// configuration under test.
+func (o *Oracle) In(dir string, args ...string) ([]byte, error) {
+	return o.runIn(dir, args...)
+}
+
+// run invokes git from the throwaway home, which keeps repository discovery
+// away from whatever tree the caller happens to sit in.
+func (o *Oracle) run(args ...string) ([]byte, error) { return o.runIn(o.Home, args...) }
+
+func (o *Oracle) runIn(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command(o.Path, args...)
-	// Running from the throwaway home keeps repository discovery away from
-	// whatever tree the caller happens to sit in.
-	cmd.Dir = o.Home
+	cmd.Dir = dir
 	cmd.Env = []string{
 		"GIT_CONFIG_NOSYSTEM=1",
 		"HOME=" + o.Home,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/polycratia/gitdisarm/catalog"
 	"github.com/polycratia/gitdisarm/gitconfig"
+	"github.com/polycratia/gitdisarm/repo"
 )
 
 const usageText = `gitdisarm lists every program a repository's git configuration would run.
@@ -23,7 +24,10 @@ usage:
 
 With no argument it reads .git/config in the current directory. A directory is
 read the same way, or as a bare repository's own config file; anything else is
-read as a configuration file. Values are listed and never run.
+read as a configuration file. A directory is also walked for the bare
+repositories sitting in its work tree, which git discovery would open as
+repositories of their own, and each of those is read as well. Values are listed
+and never run.
 
 exit status:
   0  no key this catalog covers names a program, which is not a claim that the
@@ -62,19 +66,12 @@ func run(out, errOut io.Writer, args []string) int {
 		paths = []string{"."}
 	}
 
-	var r report
+	var r Report
 	for _, p := range paths {
-		file, err := configFile(p)
-		if err != nil {
+		if err := r.addPath(out, p, *all); err != nil {
 			fmt.Fprintf(errOut, "gitdisarm: %v\n", err)
 			return exitError
 		}
-		entries, err := parse(file)
-		if err != nil {
-			fmt.Fprintf(errOut, "gitdisarm: %v\n", err)
-			return exitError
-		}
-		r.add(out, file, entries, *all)
 	}
 	r.summary(out)
 
@@ -84,21 +81,22 @@ func run(out, errOut io.Writer, args []string) int {
 	return exitClean
 }
 
-// configFile resolves one argument to the configuration file to read.
-func configFile(path string) (string, error) {
+// configFile resolves one argument to the configuration file to read, and
+// reports whether the argument was a directory, whose work tree is walked too.
+func configFile(path string) (string, bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if !info.IsDir() {
-		return path, nil
+		return path, false, nil
 	}
 	for _, candidate := range []string{filepath.Join(path, ".git", "config"), filepath.Join(path, "config")} {
 		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
-			return candidate, nil
+			return candidate, true, nil
 		}
 	}
-	return "", fmt.Errorf("%s: holds neither .git/config nor a bare repository's config", path)
+	return "", true, fmt.Errorf("%s: holds neither .git/config nor a bare repository's config", path)
 }
 
 func parse(file string) ([]gitconfig.Entry, error) {
@@ -110,7 +108,13 @@ func parse(file string) ([]gitconfig.Entry, error) {
 	return gitconfig.Parse(f, file)
 }
 
-type report struct {
+// Report is what one run has to say: the counts, the overrides the findings
+// ask for, and the repositories found inside a work tree.
+type Report struct {
+	// EmbeddedBare are the bare repositories git discovery would open as
+	// repositories of their own, in the order they were walked.
+	EmbeddedBare []repo.Bare
+
 	executes  int
 	inert     int
 	undecided int
@@ -120,7 +124,62 @@ type report struct {
 	flags  []string
 }
 
-func (r *report) add(out io.Writer, file string, entries []gitconfig.Entry, all bool) {
+func (r *Report) addPath(out io.Writer, path string, all bool) error {
+	file, dir, err := configFile(path)
+	if err != nil {
+		return err
+	}
+	entries, err := parse(file)
+	if err != nil {
+		return err
+	}
+	r.add(out, file, entries, all)
+	if !dir {
+		return nil
+	}
+	return r.addEmbeddedBare(out, path, all)
+}
+
+// addEmbeddedBare reports the bare repositories sitting in a work tree. Each
+// one carries a configuration of its own, so each one is classified on its
+// own, and their presence asks for the override that keeps git from opening
+// any of them.
+func (r *Report) addEmbeddedBare(out io.Writer, path string, all bool) error {
+	found, err := embeddedBare(path)
+	if err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	r.EmbeddedBare = append(r.EmbeddedBare, found...)
+	r.addDisarm(repo.DisarmEmbeddedBare)
+	for _, b := range found {
+		fmt.Fprintf(out, "%s: a bare repository in the work tree, which git discovery would open\n", b.Rel)
+		if b.Config == "" {
+			fmt.Fprint(out, "          it carries no configuration of its own\n\n")
+			continue
+		}
+		entries, err := parse(b.Config)
+		if err != nil {
+			return err
+		}
+		r.add(out, b.Config, entries, all)
+	}
+	return nil
+}
+
+// embeddedBare walks a directory as a work tree, using its resolved layout
+// when it has one so that the checkout's own git directory stays out of the
+// walk.
+func embeddedBare(path string) ([]repo.Bare, error) {
+	if l, err := repo.Resolve(path); err == nil {
+		return l.EmbeddedBare()
+	}
+	return repo.EmbeddedBare(path)
+}
+
+func (r *Report) add(out io.Writer, file string, entries []gitconfig.Entry, all bool) {
 	fmt.Fprintf(out, "%s: %d keys\n", file, len(entries))
 	for _, f := range catalog.ClassifyAll(entries) {
 		switch f.Class {
@@ -140,7 +199,7 @@ func (r *report) add(out io.Writer, file string, entries []gitconfig.Entry, all 
 	fmt.Fprintln(out)
 }
 
-func (r *report) addDisarm(disarm string) {
+func (r *Report) addDisarm(disarm string) {
 	dst := &r.config
 	if !strings.HasPrefix(disarm, "-c ") {
 		dst = &r.flags
@@ -153,9 +212,16 @@ func (r *report) addDisarm(disarm string) {
 	*dst = append(*dst, disarm)
 }
 
-func (r *report) summary(out io.Writer) {
+func (r *Report) summary(out io.Writer) {
 	fmt.Fprintf(out, "keys that name a program: %d; keys this catalog does not decide: %d (catalog version %d, rows read from git %s)\n",
 		r.executes, r.undecided, catalog.Version, catalog.DocumentedAgainst)
+
+	if len(r.EmbeddedBare) > 0 {
+		fmt.Fprint(out, "\nBare repositories in the work tree, which git discovery would open as repositories of their own:\n\n")
+		for _, b := range r.EmbeddedBare {
+			fmt.Fprintf(out, "  %s\n", b.Rel)
+		}
+	}
 
 	if len(r.config) > 0 {
 		fmt.Fprintf(out, "\nRun git with every override at once:\n\n  git %s <command>\n", strings.Join(r.config, " "))
