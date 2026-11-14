@@ -53,6 +53,26 @@ Every one of those paths has to stay inside the checkout. One that leaves it yie
 
 `Layout.Hooks` answers which directory a git run would take its hooks from — `core.hooksPath` when the configuration sets one, relative to the top of the work tree and with the last declaration winning, and the common directory's `hooks` otherwise — and lists every executable regular file in it. Symlinks are followed when deciding that, because a link to an executable is one more program git would start. A directory that is absent, or is no directory at all, runs nothing. A hooks directory outside the checkout is reported as `Outside` rather than refused: the configuration may ask for what a pointer file may not, and the point is to show it.
 
+### Repositories inside the work tree
+
+A checkout that arrived as files can carry repositories of its own. `Layout.EmbeddedBare` walks the work tree and reports every directory git discovery would open as a repository, asking of it what `setup.c` asks: a HEAD it can read, an `objects` directory and a `refs` directory.
+
+```go
+found, err := l.EmbeddedBare()
+```
+
+A HEAD it can read is the same question `validate_headref` asks: a symlink is a HEAD on its own, a `ref:` line has to name a ref, and anything else has to be a whole object name followed by nothing but whitespace — so a directory holding `objects`, `refs` and a HEAD full of junk is not reported, because git would not open it either.
+
+The walk leaves out what is not an embedded repository: the checkout's own git and common directories, and any directory named `.git`, which is a checkout's own rather than one sitting in a work tree. A repository that was found is not walked into, because what sits inside it belongs to it. Symlinked directories are not followed, because a walk that followed them need not terminate, and a directory that cannot be read hides what it holds from git as well, so the walk skips it and reports the rest of the tree.
+
+Each one comes back with its resolved directory, its path as it sits in the work tree, and its own `config` when it carries one — which is read and classified like any other. Their presence asks for one override of its own:
+
+```
+-c safe.bareRepository=explicit
+```
+
+That is `repo.DisarmEmbeddedBare`: it makes git refuse a repository it was not pointed at by name, so one sitting in a work tree cannot become the repository the next command runs in. `repo.EmbeddedBare` walks a directory the same way for a tree whose layout could not be resolved.
+
 ## Command `gitdisarm`
 
 The command puts the two together: it reads a repository's configuration, classifies every key, and prints the override for each one that names a program.
@@ -79,6 +99,8 @@ Not decided here, and still able to end in a program being run:
 
 With no argument it reads `.git/config` in the current directory; a directory argument is read the same way, or as a bare repository's own config file, and anything else is read as a configuration file. `-all` reports the covered keys that name no program as well. Overrides that belong to the command rather than to git, such as `--no-ext-diff`, are listed apart from the `-c` ones.
 
+A directory is also walked for the repositories sitting in its work tree. Each one is named by its path, its own configuration is classified alongside the checkout's, the report ends by listing them together, and `-c safe.bareRepository=explicit` joins the invocation that disarms the lot.
+
 It exits 1 when at least one key names a program, 2 when a file cannot be read or is malformed, and 0 otherwise. Exit 0 is not a claim that the repository is safe, which is why every report ends with the catalog's gaps.
 
 ## Checked against git itself
@@ -100,6 +122,8 @@ git config --type=bool --file <file> <key>
 ```
 
 A table of `core.fsmonitor` spellings — mixed case, quoted, quotes stitched into the middle of a word, integers in every base and unit git accepts, and the boundary where its integer stops — requires the boolean/command split to accept and refuse exactly what git accepts and refuses, and to read the same truth. So a value git calls a boolean is never reported as a program, and a value git refuses is reported as a command with the text git itself read from the file.
+
+The oracle also answers what git makes of a tree, by being run inside one. A bare repository that git itself created with `git init --bare` inside a synthetic checkout has to be the one the walk reports; git run from inside it has to call it a bare repository, which is the discovery the walk reads; and the same git, run from the same directory with `-c safe.bareRepository=explicit`, has to refuse to open it at all. A binary older than git 2.38, where `safe.bareRepository` arrived, skips that last question with a message naming its version.
 
 Run the tests with `go test ./...`, or pin the binary first: `GITDISARM_GIT=/usr/bin/git go test ./...`.
 

@@ -27,6 +27,26 @@ func writeRepo(t *testing.T, content string) string {
 	return dir
 }
 
+// writeBare builds the three things git discovery looks for in a repository,
+// with the configuration it carries, if any.
+func writeBare(t *testing.T, dir, config string) string {
+	t.Helper()
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if config != "" {
+		if err := os.WriteFile(filepath.Join(dir, "config"), []byte(config), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	return dir
+}
+
 func writeFile(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
@@ -120,6 +140,40 @@ func TestRunAllReportsInertKeys(t *testing.T) {
 		t.Errorf("run() = %d, want %d", code, exitClean)
 	}
 	wantContains(t, out, "inert     core.fsmonitor = \"true\"")
+}
+
+func TestRunReportsTheBareRepositoriesInTheWorkTree(t *testing.T) {
+	dir := writeRepo(t, "[core]\n\tpager = sh -c id\n")
+	writeBare(t, filepath.Join(dir, "deep", "nest", "plain.git"), "")
+	writeBare(t, filepath.Join(dir, "vendor", "payload.git"), "[core]\n\teditor = sh -c id\n")
+
+	code, out, errOut := runCLI(t, dir)
+	if code != exitExecutes {
+		t.Errorf("run() = %d, want %d", code, exitExecutes)
+	}
+	if errOut != "" {
+		t.Errorf("run() wrote %q to stderr, want nothing", errOut)
+	}
+	wantContains(t, out,
+		filepath.Join("deep", "nest", "plain.git")+": a bare repository in the work tree, which git discovery would open",
+		"it carries no configuration of its own",
+		filepath.Join("vendor", "payload.git")+": a bare repository in the work tree, which git discovery would open",
+		"executes  core.editor = \"sh -c id\"",
+		"Bare repositories in the work tree, which git discovery would open as repositories of their own:",
+		"git -c core.pager=cat -c safe.bareRepository=explicit -c core.editor=true <command>",
+	)
+}
+
+func TestRunWithoutEmbeddedBareAsksForNoSuchOverride(t *testing.T) {
+	dir := writeRepo(t, "[core]\n\tpager = sh -c id\n")
+
+	_, out, _ := runCLI(t, dir)
+	if strings.Contains(out, "safe.bareRepository") {
+		t.Errorf("run() asked for the embedded-bare override with nothing embedded; output was:\n%s", out)
+	}
+	if strings.Contains(out, "Bare repositories in the work tree") {
+		t.Errorf("run() listed bare repositories it did not find; output was:\n%s", out)
+	}
 }
 
 func TestRunReadsABareRepositoryAndAPlainFile(t *testing.T) {
