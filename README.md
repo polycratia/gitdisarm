@@ -73,6 +73,25 @@ Each one comes back with its resolved directory, its path as it sits in the work
 
 That is `repo.DisarmEmbeddedBare`: it makes git refuse a repository it was not pointed at by name, so one sitting in a work tree cannot become the repository the next command runs in. `repo.EmbeddedBare` walks a directory the same way for a tree whose layout could not be resolved.
 
+## Package `gitattr`
+
+A driver the configuration defines runs nothing until the attributes bind it to a file that is there. `gitattr` reads the attributes a checkout would apply to its own paths — from `core.attributesFile`, from the `.gitattributes` of every directory of the work tree, and from `$GIT_DIR/info/attributes`, each read at the precedence git reads it — and answers which of the drivers the configuration defines those attributes name on files that exist.
+
+```go
+a, err := gitattr.Load(l.GitDir, l.Worktree, entries)
+for _, d := range a.Report(entries) {
+	if d.Armed() {
+		fmt.Printf("%s.%s is bound to %v\n", d.Family, d.Name, d.Files)
+	}
+}
+```
+
+`Report` returns one `Driver` per named `filter.<name>`, `diff.<name>` and `merge.<name>` subsection, carrying the keys that defined it and the existing files whose `filter`, `diff` or `merge` attribute names it. A driver the attributes name on no file that exists comes back with no files at all: it is defined, not armed. An attribute a `!name` line left undecided binds nothing.
+
+Patterns are matched as git matches them: one holding a slash is anchored to the directory of the file that declared it, one without is matched against the last component of a path at any depth below that directory, `**` crosses a directory only where it stands as a whole component, a bracket expression never matches a slash, and a pattern ending in `/` can only mean a directory and so names no file. A `[attr]` line defines a macro, and is counted only where git reads one — the top-level file, the git directory's, and the one `core.attributesFile` names — with `binary` defined before any of them, as git defines it. gitattributes has no negative patterns: a line whose pattern begins with `!` decides nothing and is reported in `Ignored`, naming the file and the line that carried it.
+
+`Check` answers every attribute for one path, in the words `git check-attr` prints for it, and `Files` lists what the walk found: the files of the work tree, with the git directory, any directory named `.git` and symlinked directories left out. Patterns are matched and paths are read; no value an attribute carries is ever run.
+
 ## Command `gitdisarm`
 
 The command puts the two together: it reads a repository's configuration, classifies every key, and prints the override for each one that names a program.
@@ -124,6 +143,14 @@ git config --type=bool --file <file> <key>
 A table of `core.fsmonitor` spellings — mixed case, quoted, quotes stitched into the middle of a word, integers in every base and unit git accepts, and the boundary where its integer stops — requires the boolean/command split to accept and refuse exactly what git accepts and refuses, and to read the same truth. So a value git calls a boolean is never reported as a program, and a value git refuses is reported as a command with the text git itself read from the file.
 
 The oracle also answers what git makes of a tree, by being run inside one. A bare repository that git itself created with `git init --bare` inside a synthetic checkout has to be the one the walk reports; git run from inside it has to call it a bare repository, which is the discovery the walk reads; and the same git, run from the same directory with `-c safe.bareRepository=explicit`, has to refuse to open it at all. A binary older than git 2.38, where `safe.bareRepository` arrived, skips that last question with a message naming its version.
+
+And it answers what the attributes of a tree decide. A synthetic checkout whose attributes come from all three places git reads them is handed to `git init`, and
+
+```
+git check-attr -a -z -- <every file of the checkout>
+```
+
+has to print, path by path, exactly what `gitattr.Check` decides — so the files a driver is reported as armed on are the files git would hand it.
 
 Run the tests with `go test ./...`, or pin the binary first: `GITDISARM_GIT=/usr/bin/git go test ./...`.
 
